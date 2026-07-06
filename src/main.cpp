@@ -11,9 +11,9 @@
 //    6. Render       : fondo de cámara + modelos 3D          (Renderer)
 //
 //  Controles:
-//    ESC    salir                     1  mostrar cubo
-//    R      reiniciar detección       2  mostrar pirámide
-//    SPACE  congelar imagen           3  mostrar ambos
+//    ESC    salir                     1  cubo         4  Raichu
+//    R      reiniciar detección       2  pirámide     5  Pikachu + Raichu
+//    SPACE  congelar imagen           3  Pikachu
 //    C      capturar vista de calibración
 //    K      ejecutar calibración y guardarla en YAML
 //
@@ -43,8 +43,7 @@ namespace {
 /// Estado mutable de la aplicación compartido con el callback de teclado.
 struct AppState
 {
-    bool showCube        = true;    // tecla 1 (modelo por defecto)
-    bool showPyramid     = false;   // tecla 2
+    SceneModel model = SceneModel::Cube;   // teclas 1..5 (cubo por defecto)
     bool captureCalibView = false;  // tecla C: capturar vista en este frame
     bool runCalibration   = false;  // tecla K: calibrar en este frame
     bool resetRequested   = false;  // tecla R
@@ -53,9 +52,13 @@ struct AppState
 /// Nombre legible del modelo activo para el HUD.
 std::string currentModelName(const AppState& s)
 {
-    if (s.showCube && s.showPyramid) return "Cubo + Piramide";
-    if (s.showCube)                  return "Cubo";
-    if (s.showPyramid)               return "Piramide";
+    switch (s.model) {
+        case SceneModel::Cube:    return "Cubo";
+        case SceneModel::Pyramid: return "Piramide";
+        case SceneModel::Pikachu: return "Pikachu";
+        case SceneModel::Raichu:  return "Raichu";
+        case SceneModel::Both:    return "Pikachu + Raichu";
+    }
     return "Ninguno";
 }
 
@@ -96,7 +99,7 @@ void drawHUD(cv::Mat& frame, double fps, bool boardFound, const Pose& pose,
         line("Pose: ---");
     }
 
-    line("Modelo [1/2/3]: " + currentModelName(state));
+    line("Modelo [1-5]: " + currentModelName(state));
 
     std::ostringstream cs;
     cs << "Calibracion: "
@@ -182,9 +185,11 @@ int main(int argc, char** argv)
             case GLFW_KEY_ESCAPE: renderer.requestClose();        break;
             case GLFW_KEY_SPACE:  camera.toggleFrozen();          break;
             case GLFW_KEY_R:      state.resetRequested = true;    break;
-            case GLFW_KEY_1:      state.showCube = true;  state.showPyramid = false; break;
-            case GLFW_KEY_2:      state.showCube = false; state.showPyramid = true;  break;
-            case GLFW_KEY_3:      state.showCube = true;  state.showPyramid = true;  break;
+            case GLFW_KEY_1:      state.model = SceneModel::Cube;    break;
+            case GLFW_KEY_2:      state.model = SceneModel::Pyramid; break;
+            case GLFW_KEY_3:      state.model = SceneModel::Pikachu; break;
+            case GLFW_KEY_4:      state.model = SceneModel::Raichu;  break;
+            case GLFW_KEY_5:      state.model = SceneModel::Both;    break;
             case GLFW_KEY_C:      state.captureCalibView = true;  break;
             case GLFW_KEY_K:      state.runCalibration   = true;  break;
             default: break;
@@ -296,7 +301,7 @@ int main(int argc, char** argv)
                 frameSize.width, frameSize.height,
                 config::NEAR_PLANE, config::FAR_PLANE);
 
-            renderer.drawScene(view, proj, state.showCube, state.showPyramid);
+            renderer.drawScene(view, proj, state.model);
         }
 
         renderer.endFrame();

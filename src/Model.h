@@ -67,6 +67,18 @@ public:
     /// Ejes XYZ como líneas de colores: X rojo, Y verde, Z azul.
     static Model createAxes(float length);
 
+    // ---- Primitivas suaves (para personajes procedurales) -----------------
+    /// Elipsoide centrado en el origen con radios (rx,ry,rz). Normales
+    /// analíticas correctas (soporta radios distintos). Polos sobre el eje Z.
+    static Model createEllipsoid(const glm::vec3& radii,
+                                 int stacks = 18, int slices = 28);
+
+    /// Cono con la base (radio r) en Z=0 y el ápice en (0,0,height).
+    static Model createCone(float radius, float height, int slices = 28);
+
+    /// Caja centrada en el origen con semiejes halfExtents (x,y,z).
+    static Model createBox(const glm::vec3& halfExtents);
+
 private:
     void destroy();
 

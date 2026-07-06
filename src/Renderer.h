@@ -29,6 +29,19 @@
 
 struct GLFWwindow;   // forward declaration (evita incluir glfw3.h aquí)
 
+/// Modelo 3D que se muestra anclado al tablero (teclas 1..5).
+enum class SceneModel { Cube, Pyramid, Pikachu, Raichu, Both };
+
+/// Una pieza coloreada de un personaje procedural (p. ej. la oreja de
+/// Pikachu). Cada pieza es una malla propia con su transformación local
+/// respecto al centro del personaje y su color base para el shader iluminado.
+struct ModelPart
+{
+    Model     mesh;
+    glm::mat4 localTransform{1.0f};
+    glm::vec3 color{1.0f};
+};
+
 /// Ventana + contexto GL + dibujo del fondo de cámara y los modelos 3D.
 class Renderer
 {
@@ -58,9 +71,9 @@ public:
     /// Dibuja la escena 3D anclada al tablero.
     /// @param view       matriz de vista (de solvePnP, convención GL)
     /// @param projection matriz de proyección (de los intrínsecos K)
-    /// @param showCube / showPyramid selección de modelos (tecla 1/2/3)
+    /// @param model      modelo a mostrar (teclas 1..5)
     void drawScene(const glm::mat4& view, const glm::mat4& projection,
-                   bool showCube, bool showPyramid);
+                   SceneModel model);
 
     /// Intercambia los buffers (double buffering => sin flickering).
     void endFrame();
@@ -89,11 +102,20 @@ private:
     int    m_texWidth = 0, m_texHeight = 0;
 
     // -- Escena 3D --
-    Shader m_modelShader;   ///< iluminación básica (cubo y pirámide)
+    Shader m_modelShader;   ///< iluminación básica (cubo, pirámide, personajes)
     Shader m_axesShader;    ///< color por vértice (ejes XYZ)
     Model  m_cube;
     Model  m_pyramid;
     Model  m_axes;
+
+    // -- Personajes procedurales (listas de piezas coloreadas) --
+    std::vector<ModelPart> m_pikachu;
+    std::vector<ModelPart> m_raichu;
+
+    /// Dibuja un personaje (lista de piezas) con el shader iluminado ya
+    /// activo; baseModel sitúa y orienta al personaje sobre el tablero.
+    void drawCharacter(const std::vector<ModelPart>& parts,
+                       const glm::mat4& baseModel);
 
     /// Traslada al centro del tablero y voltea +Z del modelo hacia la cámara.
     glm::mat4 m_boardCenterTransform{1.0f};

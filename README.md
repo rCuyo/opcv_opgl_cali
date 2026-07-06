@@ -126,7 +126,9 @@ cmake --build build -j
 |---|---|
 | `1` | Mostrar cubo (rojo) |
 | `2` | Mostrar pirámide (verde) |
-| `3` | Mostrar ambos |
+| `3` | Mostrar **Pikachu** |
+| `4` | Mostrar **Raichu** |
+| `5` | Mostrar **Pikachu + Raichu** |
 | `SPACE` | Congelar / descongelar la imagen |
 | `R` | Reiniciar detección (filtro de pose, descongela) |
 | `C` | Capturar vista de calibración |
@@ -145,16 +147,23 @@ El HUD muestra en pantalla: FPS, estado del chessboard, pose encontrada
 *(código: `ChessboardDetector.cpp`)*
 
 1. El frame se convierte a escala de grises.
-2. `cv::findChessboardCorners()` binariza la imagen con umbral adaptativo,
-   localiza los cuadriláteros negros del patrón y agrupa sus esquinas en una
-   rejilla de `BOARD_COLS × BOARD_ROWS` (9×6). Devuelve las esquinas
-   **ordenadas fila a fila**, lo que permite emparejarlas 1:1 con puntos 3D
-   conocidos del tablero. El flag `CALIB_CB_FAST_CHECK` descarta rápido los
-   frames sin tablero para no hundir el frame-rate.
-3. `cv::cornerSubPix()` refina cada esquina con precisión **subpíxel**
-   iterando sobre los gradientes locales de la imagen hasta converger al
-   punto de silla exacto. Sin este paso, la pose vibraría visiblemente.
-4. Las esquinas se dibujan con `cv::drawChessboardCorners()`.
+2. **Detector principal `cv::findChessboardCornersSB()`** (sector-based,
+   basado en la transformada de Radon; OpenCV ≥ 4). Es **mucho más robusto**
+   que el clásico ante **perspectiva extrema** (tablero visto casi de canto o
+   muy lateral), deformación proyectiva fuerte, desenfoque y baja iluminación
+   — justo los casos donde el clásico falla. Se corre con `NORMALIZE_IMAGE`,
+   `EXHAUSTIVE` (búsqueda a fondo) y `ACCURACY` (refinamiento fino); ya
+   devuelve esquinas con precisión **subpíxel**, así que no necesita
+   `cornerSubPix`. Los frames sin tablero se descartan rápido, sin hundir el
+   frame-rate.
+3. **Fallback clásico** si SB no converge: se realza el contraste local con
+   **CLAHE** (ecualización adaptativa con límite de contraste, útil en
+   penumbra lateral) y se ejecuta `cv::findChessboardCorners()` (umbral
+   adaptativo) + `cv::cornerSubPix()` (refinamiento subpíxel). Da una segunda
+   oportunidad antes de darse por vencido.
+4. En ambos casos las esquinas quedan **ordenadas fila a fila**, lo que
+   permite emparejarlas 1:1 con los puntos 3D conocidos del tablero, y se
+   dibujan con `cv::drawChessboardCorners()`.
 
 ### 5.2 Cálculo de la pose
 
@@ -228,13 +237,22 @@ Todo el render usa OpenGL moderno, sin `glBegin/glEnd`:
    vértice con `P · V · M` y pasa la normal en espacio de mundo
    (con la matriz normal `transpose(inverse(M))`).
 3. El **fragment shader** (`model.frag`) aplica iluminación básica:
-   ambiente + difusa lambertiana con una luz direccional fija.
+   ambiente + luz principal (*key*) difusa lambertiana + una luz de relleno
+   (*fill*) tenue desde el lado opuesto, para que la cara que mira a la
+   cámara no quede plana.
 4. Geometrías: **cubo rojo** (24 vértices, normales por cara),
    **pirámide verde** (base cuadrada + 4 caras triangulares) y
    **ejes XYZ** (líneas: X rojo, Y verde, Z azul, sin iluminación).
    Como en la convención OpenCV el +Z del tablero apunta *hacia dentro*
    de la mesa, la matriz de modelo gira los objetos 180° sobre X para que
    se eleven hacia la cámara.
+5. **Personajes procedurales Pikachu y Raichu** (`Renderer.cpp`): se
+   construyen ensamblando **primitivas suaves** (elipsoides, conos y cajas,
+   con `Model::createEllipsoid/createCone/createBox` y normales analíticas
+   correctas). Cada personaje es una lista de piezas coloreadas
+   (`ModelPart`), dibujadas con el mismo shader iluminado fijando
+   `uObjectColor` por pieza. Así se obtiene un modelo reconocible **sin
+   depender de archivos `.obj` externos ni de assets con copyright**.
 
 ### 5.5 Sincronización de la cámara con OpenGL
 

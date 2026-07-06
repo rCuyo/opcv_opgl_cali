@@ -10,6 +10,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <opencv2/imgproc.hpp>
 #include <iostream>
+#include <utility>
 
 namespace {
 
@@ -20,8 +21,8 @@ constexpr float PYRAMID_BASE   = 2.5f * config::SQUARE_SIZE;
 constexpr float PYRAMID_HEIGHT = 2.5f * config::SQUARE_SIZE;
 constexpr float AXES_LENGTH    = 3.0f * config::SQUARE_SIZE;
 
-// Separación entre modelos cuando se muestran ambos (tecla 3).
-constexpr float SIDE_OFFSET    = 2.2f * config::SQUARE_SIZE;
+// Separación a cada lado del centro cuando se muestran dos personajes (tecla 5).
+constexpr float CHARACTER_OFFSET = 2.8f * config::SQUARE_SIZE;
 
 /// Callback estático de GLFW: redirige al Renderer dueño de la ventana.
 void keyDispatch(GLFWwindow* window, int key, int /*scancode*/,
@@ -32,6 +33,118 @@ void keyDispatch(GLFWwindow* window, int key, int /*scancode*/,
     auto* self = static_cast<Renderer*>(glfwGetWindowUserPointer(window));
     if (self)
         self->dispatchKey(key);
+}
+
+// ---------------------------------------------------------------------------
+// Personajes procedurales (Pikachu / Raichu)
+//
+// Cada personaje se construye como una lista de piezas (ModelPart). Se usa un
+// puñado de primitivas suaves (elipsoides, conos y cajas) coloreadas, que se
+// dibujan con el MISMO shader iluminado que el cubo/pirámide (uObjectColor por
+// pieza). Así se logra un modelo reconocible sin depender de archivos .obj
+// externos ni de assets con copyright. El personaje crece a lo largo de +Z
+// (los pies quedan en Z≈0); m_boardCenterTransform lo pone de pie sobre el
+// tablero, mirando hacia la cámara.
+// ---------------------------------------------------------------------------
+const glm::vec3 kYellow(0.98f, 0.82f, 0.12f);   // amarillo Pikachu
+const glm::vec3 kBlack (0.07f, 0.07f, 0.07f);   // ojos, puntas de orejas
+const glm::vec3 kRed   (0.86f, 0.13f, 0.13f);   // mejillas Pikachu
+const glm::vec3 kBrown (0.42f, 0.28f, 0.10f);   // base de cola / cola Raichu
+const glm::vec3 kOrange(0.95f, 0.55f, 0.13f);   // cuerpo Raichu
+const glm::vec3 kCream (0.98f, 0.90f, 0.72f);   // panza Raichu
+const glm::vec3 kYcheek(0.96f, 0.80f, 0.16f);   // mejillas Raichu
+
+inline glm::mat4 T(float x, float y, float z)
+{
+    return glm::translate(glm::mat4(1.0f), glm::vec3(x, y, z));
+}
+inline glm::mat4 Rx(float deg) { return glm::rotate(glm::mat4(1.0f), glm::radians(deg), glm::vec3(1,0,0)); }
+inline glm::mat4 Ry(float deg) { return glm::rotate(glm::mat4(1.0f), glm::radians(deg), glm::vec3(0,1,0)); }
+
+void addPart(std::vector<ModelPart>& parts, Model mesh,
+             const glm::mat4& xf, const glm::vec3& color)
+{
+    ModelPart p;
+    p.mesh           = std::move(mesh);
+    p.localTransform = xf;
+    p.color          = color;
+    parts.push_back(std::move(p));
+}
+
+std::vector<ModelPart> buildPikachu()
+{
+    std::vector<ModelPart> p;
+
+    // Cuerpo y cabeza (regordete, cabeza grande).
+    addPart(p, Model::createEllipsoid({1.05f, 0.95f, 1.30f}), T(0, 0, 1.45f), kYellow);
+    addPart(p, Model::createEllipsoid({1.25f, 1.15f, 1.05f}), T(0, 0, 3.05f), kYellow);
+
+    // Orejas: cono amarillo con punta negra. La cara mira hacia +Y.
+    for (float s : {-1.0f, 1.0f}) {
+        const glm::mat4 ear = T(0.55f * s, -0.10f, 3.70f) * Ry(28.0f * s) * Rx(-10.0f);
+        addPart(p, Model::createCone(0.32f, 1.70f), ear,                   kYellow);
+        addPart(p, Model::createCone(0.34f, 0.60f), ear * T(0, 0, 1.15f),  kBlack);
+    }
+
+    // Ojos, mejillas rojas y nariz sobre la cara (+Y).
+    for (float s : {-1.0f, 1.0f}) {
+        addPart(p, Model::createEllipsoid({0.17f, 0.10f, 0.20f}), T(0.50f * s, 0.98f, 3.25f), kBlack);
+        addPart(p, Model::createEllipsoid({0.33f, 0.12f, 0.33f}), T(0.82f * s, 0.72f, 2.78f), kRed);
+    }
+    addPart(p, Model::createEllipsoid({0.08f, 0.07f, 0.06f}), T(0, 1.10f, 3.02f), kBlack);
+
+    // Brazos y pies.
+    for (float s : {-1.0f, 1.0f}) {
+        addPart(p, Model::createEllipsoid({0.34f, 0.34f, 0.55f}), T(1.02f * s, 0.05f, 1.55f) * Ry(20.0f * s), kYellow);
+        addPart(p, Model::createEllipsoid({0.42f, 0.58f, 0.30f}), T(0.52f * s, 0.15f, 0.28f), kYellow);
+    }
+
+    // Cola en zigzag (rayo) detrás del cuerpo (-Y), con base marrón.
+    addPart(p, Model::createBox({0.16f, 0.10f, 0.30f}), T( 0.00f, -1.15f, 0.90f) * Ry( 35.0f), kBrown);
+    addPart(p, Model::createBox({0.17f, 0.11f, 0.42f}), T( 0.28f, -1.20f, 1.50f) * Ry(-42.0f), kYellow);
+    addPart(p, Model::createBox({0.17f, 0.11f, 0.48f}), T(-0.05f, -1.25f, 2.25f) * Ry( 38.0f), kYellow);
+    addPart(p, Model::createBox({0.18f, 0.11f, 0.50f}), T( 0.30f, -1.30f, 3.00f) * Ry(-34.0f), kYellow);
+
+    return p;
+}
+
+std::vector<ModelPart> buildRaichu()
+{
+    std::vector<ModelPart> p;
+
+    // Cuerpo naranja más alto y estilizado, con panza crema.
+    addPart(p, Model::createEllipsoid({1.00f, 0.92f, 1.45f}), T(0, 0.00f, 1.65f), kOrange);
+    addPart(p, Model::createEllipsoid({0.62f, 0.45f, 0.95f}), T(0, 0.55f, 1.55f), kCream);
+    addPart(p, Model::createEllipsoid({1.18f, 1.08f, 1.00f}), T(0, 0.00f, 3.45f), kOrange);
+
+    // Orejas largas, naranja con punta marrón.
+    for (float s : {-1.0f, 1.0f}) {
+        const glm::mat4 ear = T(0.50f * s, -0.10f, 4.05f) * Ry(30.0f * s) * Rx(-8.0f);
+        addPart(p, Model::createCone(0.28f, 2.20f), ear,                  kOrange);
+        addPart(p, Model::createCone(0.30f, 0.80f), ear * T(0, 0, 1.55f), kBrown);
+    }
+
+    // Ojos, mejillas amarillas y nariz.
+    for (float s : {-1.0f, 1.0f}) {
+        addPart(p, Model::createEllipsoid({0.16f, 0.10f, 0.19f}), T(0.48f * s, 0.92f, 3.62f), kBlack);
+        addPart(p, Model::createEllipsoid({0.30f, 0.12f, 0.30f}), T(0.78f * s, 0.66f, 3.15f), kYcheek);
+    }
+    addPart(p, Model::createEllipsoid({0.08f, 0.07f, 0.06f}), T(0, 1.02f, 3.40f), kBlack);
+
+    // Brazos y pies.
+    for (float s : {-1.0f, 1.0f}) {
+        addPart(p, Model::createEllipsoid({0.30f, 0.30f, 0.60f}), T(0.98f * s, 0.05f, 1.70f) * Ry(18.0f * s), kOrange);
+        addPart(p, Model::createEllipsoid({0.40f, 0.55f, 0.28f}), T(0.50f * s, 0.15f, 0.26f), kOrange);
+    }
+
+    // Cola larga y fina que sube por detrás y termina en un gran rayo.
+    addPart(p, Model::createBox({0.10f, 0.10f, 0.70f}), T(0, -1.20f, 1.20f) * Rx(-35.0f), kBrown);
+    addPart(p, Model::createBox({0.10f, 0.10f, 0.70f}), T(0, -1.90f, 2.40f) * Rx(-70.0f), kBrown);
+    const glm::mat4 bolt = T(0, -2.55f, 3.10f);
+    addPart(p, Model::createBox({0.50f, 0.08f, 0.22f}), bolt * Ry( 35.0f),               kBrown);
+    addPart(p, Model::createBox({0.50f, 0.08f, 0.22f}), bolt * T(0.20f, 0, 0.55f) * Ry(-40.0f), kBrown);
+
+    return p;
 }
 
 } // namespace
@@ -114,6 +227,8 @@ bool Renderer::init(int width, int height, const std::string& title)
     m_cube    = Model::createCube(CUBE_SIZE);
     m_pyramid = Model::createPyramid(PYRAMID_BASE, PYRAMID_HEIGHT);
     m_axes    = Model::createAxes(AXES_LENGTH);
+    m_pikachu = buildPikachu();
+    m_raichu  = buildRaichu();
 
     // Quad de fondo en coordenadas NDC directas (no necesita matrices).
     // location 0 = posición NDC, location 1 = (u, v, 0).
@@ -234,8 +349,21 @@ void Renderer::beginFrame(const cv::Mat& frameBGR)
     drawBackground();
 }
 
+void Renderer::drawCharacter(const std::vector<ModelPart>& parts,
+                             const glm::mat4& baseModel)
+{
+    // El shader iluminado ya está activo con view/projection/luz fijados.
+    // Cada pieza aporta su transformación local (respecto al centro del
+    // personaje) y su color base.
+    for (const ModelPart& part : parts) {
+        m_modelShader.setMat4("uModel", baseModel * part.localTransform);
+        m_modelShader.setVec3("uObjectColor", part.color);
+        part.mesh.draw();
+    }
+}
+
 void Renderer::drawScene(const glm::mat4& view, const glm::mat4& projection,
-                         bool showCube, bool showPyramid)
+                         SceneModel model)
 {
     // ---- Ejes XYZ en el origen del tablero ----------------------------------
     m_axesShader.use();
@@ -254,27 +382,39 @@ void Renderer::drawScene(const glm::mat4& view, const glm::mat4& projection,
     m_modelShader.setVec3("uLightDir",
                           glm::normalize(glm::vec3(0.4f, 0.3f, -1.0f)));
 
-    // Si solo hay un modelo se centra; con ambos, se separan sobre el eje X.
-    const glm::vec3 cubeOffset    = (showCube && showPyramid)
-                                    ? glm::vec3(-SIDE_OFFSET, 0.f, 0.f)
-                                    : glm::vec3(0.f);
-    const glm::vec3 pyramidOffset = (showCube && showPyramid)
-                                    ? glm::vec3(+SIDE_OFFSET, 0.f, 0.f)
-                                    : glm::vec3(0.f);
+    switch (model) {
+        case SceneModel::Cube:
+            m_modelShader.setMat4("uModel", m_boardCenterTransform);
+            m_modelShader.setVec3("uObjectColor", glm::vec3(0.9f, 0.1f, 0.1f)); // rojo
+            m_cube.draw();
+            break;
 
-    if (showCube) {
-        const glm::mat4 model =
-            glm::translate(glm::mat4(1.0f), cubeOffset) * m_boardCenterTransform;
-        m_modelShader.setMat4("uModel", model);
-        m_modelShader.setVec3("uObjectColor", glm::vec3(0.9f, 0.1f, 0.1f)); // rojo
-        m_cube.draw();
-    }
-    if (showPyramid) {
-        const glm::mat4 model =
-            glm::translate(glm::mat4(1.0f), pyramidOffset) * m_boardCenterTransform;
-        m_modelShader.setMat4("uModel", model);
-        m_modelShader.setVec3("uObjectColor", glm::vec3(0.1f, 0.8f, 0.15f)); // verde
-        m_pyramid.draw();
+        case SceneModel::Pyramid:
+            m_modelShader.setMat4("uModel", m_boardCenterTransform);
+            m_modelShader.setVec3("uObjectColor", glm::vec3(0.1f, 0.8f, 0.15f)); // verde
+            m_pyramid.draw();
+            break;
+
+        case SceneModel::Pikachu:
+            drawCharacter(m_pikachu, m_boardCenterTransform);
+            break;
+
+        case SceneModel::Raichu:
+            drawCharacter(m_raichu, m_boardCenterTransform);
+            break;
+
+        case SceneModel::Both: {
+            // Pikachu a la izquierda, Raichu a la derecha del centro.
+            const glm::mat4 left =
+                glm::translate(glm::mat4(1.0f), glm::vec3(-CHARACTER_OFFSET, 0.f, 0.f))
+                * m_boardCenterTransform;
+            const glm::mat4 right =
+                glm::translate(glm::mat4(1.0f), glm::vec3(+CHARACTER_OFFSET, 0.f, 0.f))
+                * m_boardCenterTransform;
+            drawCharacter(m_pikachu, left);
+            drawCharacter(m_raichu,  right);
+            break;
+        }
     }
 }
 

@@ -33,25 +33,38 @@ bool ChessboardDetector::detect(const cv::Mat& frame,
     cv::Mat gray;
     cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
 
-    // Flags:
-    //  - ADAPTIVE_THRESH: umbral adaptativo, robusto ante iluminación variable.
-    //  - NORMALIZE_IMAGE: ecualiza antes de umbralizar.
-    //  - FAST_CHECK: descarta rápidamente frames sin tablero (clave para
-    //    mantener el frame-rate cuando el patrón no está a la vista).
-    const int flags = cv::CALIB_CB_ADAPTIVE_THRESH |
-                      cv::CALIB_CB_NORMALIZE_IMAGE |
-                      cv::CALIB_CB_FAST_CHECK;
+    // ---- 1) Detector "SB" (sector-based / transformada de Radon) ----------
+    // Introducido en OpenCV 4, es MUCHO más robusto que el clásico ante:
+    //   - perspectiva extrema (tablero visto casi de canto / muy lateral),
+    //   - deformación proyectiva fuerte, desenfoque y baja iluminación.
+    // Además ya devuelve esquinas con precisión subpíxel, así que no
+    // necesita cornerSubPix. Se pide NORMALIZE (robustez a iluminación),
+    // EXHAUSTIVE (búsqueda a fondo, clave en ángulos difíciles) y ACCURACY
+    // (refinamiento fino de cada esquina).
+    const int sbFlags = cv::CALIB_CB_NORMALIZE_IMAGE |
+                        cv::CALIB_CB_EXHAUSTIVE |
+                        cv::CALIB_CB_ACCURACY;
+    if (cv::findChessboardCornersSB(gray, m_boardSize, corners, sbFlags) &&
+        corners.size() == static_cast<size_t>(m_boardSize.area()))
+        return true;
 
-    bool found = cv::findChessboardCorners(gray, m_boardSize, corners, flags);
-    if (!found)
+    // ---- 2) Fallback: detector clásico sobre imagen realzada con CLAHE ----
+    // CLAHE (ecualización adaptativa con límite de contraste) levanta el
+    // contraste local de tableros mal iluminados o en penumbra lateral,
+    // dando una segunda oportunidad cuando SB no converge.
+    cv::Mat enhanced;
+    cv::createCLAHE(2.0, cv::Size(8, 8))->apply(gray, enhanced);
+
+    corners.clear();
+    const int flags = cv::CALIB_CB_ADAPTIVE_THRESH |
+                      cv::CALIB_CB_NORMALIZE_IMAGE;   // sin FAST_CHECK: no descartar
+    if (!cv::findChessboardCorners(enhanced, m_boardSize, corners, flags))
         return false;
 
-    // Refinamiento subpíxel: ventana de búsqueda de 11x11 píxeles alrededor
-    // de cada esquina; termina tras 30 iteraciones o cuando el desplazamiento
-    // es menor a 0.1 px. Sin este paso la pose vibra apreciablemente.
+    // Refinamiento subpíxel del método clásico (SB ya lo trae incorporado).
     const cv::TermCriteria criteria(
         cv::TermCriteria::EPS + cv::TermCriteria::COUNT, 30, 0.1);
-    cv::cornerSubPix(gray, corners, cv::Size(11, 11), cv::Size(-1, -1),
+    cv::cornerSubPix(enhanced, corners, cv::Size(11, 11), cv::Size(-1, -1),
                      criteria);
 
     return true;

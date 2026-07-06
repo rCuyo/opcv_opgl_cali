@@ -19,11 +19,17 @@ void main()
     vec3 n = normalize(vNormal);
 
     // Componente ambiente: evita que las caras en sombra queden negras.
-    float ambient = 0.35;
+    float ambient = 0.40;
 
-    // Componente difusa (ley de Lambert): máxima cuando la cara mira a la luz.
-    float diffuse = max(dot(n, -uLightDir), 0.0) * 0.75;
+    // Luz principal (key): difusa de Lambert, máxima cuando la cara mira a la
+    // luz. Da el volumen y las sombras propias del modelo.
+    float key = max(dot(n, -uLightDir), 0.0) * 0.65;
 
-    vec3 color = uObjectColor * (ambient + diffuse);
+    // Luz de relleno (fill): tenue y desde el lado opuesto. Evita que la cara
+    // que mira a la cámara quede plana (solo ambiente) cuando el objeto se ve
+    // de frente, sin eliminar el modelado de la luz principal.
+    float fill = max(dot(n, uLightDir), 0.0) * 0.25;
+
+    vec3 color = uObjectColor * (ambient + key + fill);
     FragColor = vec4(color, 1.0);
 }
