@@ -95,6 +95,7 @@ add_executable(ar_chessboard
 target_include_directories(ar_chessboard PRIVATE
     src
     utils
+    external/cgltf              # parser glTF de cabecera única
     ${OpenCV_INCLUDE_DIRS}
 )
 

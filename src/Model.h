@@ -21,6 +21,7 @@
 
 #include <glad/glad.h>
 #include <glm/glm.hpp>
+#include <string>
 #include <vector>
 
 /// Malla en GPU: VAO + VBO (+ EBO opcional) con su primitiva de dibujo.
@@ -30,8 +31,9 @@ public:
     /// Layout de los atributos de vértice del VBO.
     enum class VertexLayout
     {
-        PositionNormal,   ///< 6 floats: pos.xyz + normal.xyz  (modelos con luz)
-        PositionColor     ///< 6 floats: pos.xyz + color.rgb   (ejes, sin luz)
+        PositionNormal,    ///< 6 floats: pos.xyz + normal.xyz  (modelos con luz)
+        PositionColor,     ///< 6 floats: pos.xyz + color.rgb   (ejes, sin luz)
+        PositionNormalUV   ///< 8 floats: pos.xyz + normal.xyz + uv (texturados)
     };
 
     Model() = default;
@@ -56,6 +58,9 @@ public:
     /// Dibuja la malla (el shader y los uniforms deben estar preparados).
     void draw() const;
 
+    /// true si la malla tiene datos en GPU listos para dibujar.
+    bool isValid() const { return m_vao != 0 && m_indexCount > 0; }
+
     // ---- Fábricas de las geometrías del proyecto --------------------------
     /// Cubo unitario centrado en XY, apoyado sobre el plano Z=0 y elevándose
     /// hacia Z+ del objeto (24 vértices con normales por cara).
@@ -78,6 +83,26 @@ public:
 
     /// Caja centrada en el origen con semiejes halfExtents (x,y,z).
     static Model createBox(const glm::vec3& halfExtents);
+
+    // ---- Modelos externos --------------------------------------------------
+    /// Carga la geometría de un archivo glTF 2.0 (.gltf o .glb), por
+    /// ejemplo un modelo descargado de Sketchfab con la opción "glTF".
+    ///
+    /// - Recorre el árbol de nodos aplicando (horneando) sus
+    ///   transformaciones en los vértices.
+    /// - Convierte de la convención glTF (Y arriba) a la del proyecto
+    ///   (Z arriba, apoyado sobre el tablero).
+    /// - Normaliza el tamaño: centra en XY, apoya la base en Z=0 y escala
+    ///   para que su lado mayor horizontal mida targetSize unidades.
+    ///
+    /// @param path           ruta del .gltf/.glb
+    /// @param targetSize     tamaño final en unidades de mundo (cuadrados)
+    /// @param texturePathOut [out] ruta de la textura baseColor del modelo
+    ///                       (vacía si no tiene). Solo se usa la primera:
+    ///                       suficiente para modelos con atlas único.
+    /// @return malla con layout PositionNormalUV; isValid()==false si falla
+    static Model loadGltf(const std::string& path, float targetSize,
+                          std::string& texturePathOut);
 
 private:
     void destroy();

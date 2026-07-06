@@ -33,39 +33,48 @@ bool ChessboardDetector::detect(const cv::Mat& frame,
     cv::Mat gray;
     cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
 
-    // ---- 1) Detector "SB" (sector-based / transformada de Radon) ----------
-    // Introducido en OpenCV 4, es MUCHO más robusto que el clásico ante:
-    //   - perspectiva extrema (tablero visto casi de canto / muy lateral),
-    //   - deformación proyectiva fuerte, desenfoque y baja iluminación.
-    // Además ya devuelve esquinas con precisión subpíxel, así que no
-    // necesita cornerSubPix. Se pide NORMALIZE (robustez a iluminación),
-    // EXHAUSTIVE (búsqueda a fondo, clave en ángulos difíciles) y ACCURACY
-    // (refinamiento fino de cada esquina).
-    const int sbFlags = cv::CALIB_CB_NORMALIZE_IMAGE |
-                        cv::CALIB_CB_EXHAUSTIVE |
-                        cv::CALIB_CB_ACCURACY;
-    if (cv::findChessboardCornersSB(gray, m_boardSize, corners, sbFlags) &&
-        corners.size() == static_cast<size_t>(m_boardSize.area()))
-        return true;
+    const cv::TermCriteria subpixCriteria(
+        cv::TermCriteria::EPS + cv::TermCriteria::COUNT, 30, 0.1);
 
-    // ---- 2) Fallback: detector clásico sobre imagen realzada con CLAHE ----
-    // CLAHE (ecualización adaptativa con límite de contraste) levanta el
-    // contraste local de tableros mal iluminados o en penumbra lateral,
-    // dando una segunda oportunidad cuando SB no converge.
-    cv::Mat enhanced;
-    cv::createCLAHE(2.0, cv::Size(8, 8))->apply(gray, enhanced);
+    // ---- 1) Detector clásico con FAST_CHECK (caso normal, ~3-4 ms) --------
+    // Es el camino rápido: con el tablero razonablemente de frente lo
+    // encuentra casi siempre, y FAST_CHECK descarta en ~20 ms los frames
+    // sin tablero en vez de gastar cientos de ms buscando a fondo.
+    // Medido a 1280x720: clásico = 2.5 ms; SB+EXHAUSTIVE = 133-215 ms/frame,
+    // que limitaba TODO el programa a <8 FPS.
+    const int fastFlags = cv::CALIB_CB_ADAPTIVE_THRESH |
+                          cv::CALIB_CB_NORMALIZE_IMAGE |
+                          cv::CALIB_CB_FAST_CHECK;
+    if (cv::findChessboardCorners(gray, m_boardSize, corners, fastFlags)) {
+        // El clásico necesita refinamiento subpíxel explícito.
+        cv::cornerSubPix(gray, corners, cv::Size(11, 11), cv::Size(-1, -1),
+                         subpixCriteria);
+        return true;
+    }
+
+    // ---- 2) Fallback robusto: SB a media resolución (~20-30 ms) -----------
+    // El detector "SB" (sector-based, OpenCV >= 4) es mucho más robusto ante
+    // perspectiva extrema, desenfoque y baja iluminación, pero es caro a
+    // resolución completa. Ejecutarlo a media resolución (con CLAHE para
+    // levantar el contraste en penumbra) conserva esa robustez a una
+    // fracción del coste; la precisión se recupera después refinando las
+    // esquinas a resolución completa con cornerSubPix.
+    cv::Mat half;
+    cv::resize(gray, half, cv::Size(), 0.5, 0.5, cv::INTER_AREA);
+    cv::createCLAHE(2.0, cv::Size(8, 8))->apply(half, half);
 
     corners.clear();
-    const int flags = cv::CALIB_CB_ADAPTIVE_THRESH |
-                      cv::CALIB_CB_NORMALIZE_IMAGE;   // sin FAST_CHECK: no descartar
-    if (!cv::findChessboardCorners(enhanced, m_boardSize, corners, flags))
+    if (!cv::findChessboardCornersSB(half, m_boardSize, corners,
+                                     cv::CALIB_CB_NORMALIZE_IMAGE) ||
+        corners.size() != static_cast<size_t>(m_boardSize.area()))
         return false;
 
-    // Refinamiento subpíxel del método clásico (SB ya lo trae incorporado).
-    const cv::TermCriteria criteria(
-        cv::TermCriteria::EPS + cv::TermCriteria::COUNT, 30, 0.1);
-    cv::cornerSubPix(enhanced, corners, cv::Size(11, 11), cv::Size(-1, -1),
-                     criteria);
+    // Las esquinas se detectaron a mitad de escala: se llevan a resolución
+    // completa y se refinan sobre la imagen original.
+    for (cv::Point2f& c : corners)
+        c *= 2.0f;
+    cv::cornerSubPix(gray, corners, cv::Size(11, 11), cv::Size(-1, -1),
+                     subpixCriteria);
 
     return true;
 }

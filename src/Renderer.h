@@ -29,8 +29,9 @@
 
 struct GLFWwindow;   // forward declaration (evita incluir glfw3.h aquí)
 
-/// Modelo 3D que se muestra anclado al tablero (teclas 1..5).
-enum class SceneModel { Cube, Pyramid, Pikachu, Raichu, Both };
+/// Modelo 3D que se muestra anclado al tablero (teclas 1..6).
+/// Gltf es el modelo externo (Sketchfab) cargado de resources/models/.
+enum class SceneModel { Cube, Pyramid, Pikachu, Raichu, Both, Gltf };
 
 /// Una pieza coloreada de un personaje procedural (p. ej. la oreja de
 /// Pikachu). Cada pieza es una malla propia con su transformación local
@@ -111,6 +112,15 @@ private:
     // -- Personajes procedurales (listas de piezas coloreadas) --
     std::vector<ModelPart> m_pikachu;
     std::vector<ModelPart> m_raichu;
+
+    // -- Modelo externo glTF (Sketchfab), con su textura baseColor --
+    Shader m_texturedShader;      ///< iluminación + textura (model_textured.*)
+    Model  m_gltfModel;
+    GLuint m_gltfTexture = 0;
+    bool   m_hasGltf     = false;
+
+    /// Carga el modelo glTF por defecto (resources/models/...) si existe.
+    void loadGltfModel();
 
     /// Dibuja un personaje (lista de piezas) con el shader iluminado ya
     /// activo; baseModel sitúa y orienta al personaje sobre el tablero.

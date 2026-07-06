@@ -53,7 +53,7 @@ void Model::destroy()
 
 void Model::create(const std::vector<float>&  vertices,
                    const std::vector<GLuint>& indices,
-                   VertexLayout /*layout*/,
+                   VertexLayout layout,
                    GLenum primitive)
 {
     destroy();
@@ -64,7 +64,7 @@ void Model::create(const std::vector<float>&  vertices,
     glGenVertexArrays(1, &m_vao);
     glBindVertexArray(m_vao);
 
-    // VBO: atributos de vértice intercalados (6 floats por vértice).
+    // VBO: atributos de vértice intercalados (6 u 8 floats por vértice).
     glGenBuffers(1, &m_vbo);
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
     glBufferData(GL_ARRAY_BUFFER,
@@ -78,15 +78,23 @@ void Model::create(const std::vector<float>&  vertices,
                  static_cast<GLsizeiptr>(indices.size() * sizeof(GLuint)),
                  indices.data(), GL_STATIC_DRAW);
 
-    // Ambos layouts comparten estructura: 2 atributos vec3 intercalados.
-    //   location 0: posición (xyz)
-    //   location 1: normal o color (xyz / rgb)
-    const GLsizei stride = 6 * sizeof(float);
+    // Layout de atributos:
+    //   location 0: posición (xyz)                       [todos los layouts]
+    //   location 1: normal o color (xyz / rgb)           [todos los layouts]
+    //   location 2: coordenadas de textura (uv)          [solo PositionNormalUV]
+    const bool hasUV = (layout == VertexLayout::PositionNormalUV);
+    const GLsizei stride = (hasUV ? 8 : 6) * sizeof(float);
+
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
                           (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
+    if (hasUV) {
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride,
+                              (void*)(6 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+    }
 
     glBindVertexArray(0);
 }
@@ -323,5 +331,166 @@ Model Model::createBox(const glm::vec3& h)
 
     Model m;
     m.create(v, i, VertexLayout::PositionNormal, GL_TRIANGLES);
+    return m;
+}
+
+// ---------------------------------------------------------------------------
+// Carga de modelos glTF 2.0 (cgltf, cabecera única en external/cgltf)
+// ---------------------------------------------------------------------------
+#define CGLTF_IMPLEMENTATION
+#include <cgltf.h>
+
+#include <glm/gtc/type_ptr.hpp>
+#include <cfloat>
+#include <cstring>
+#include <iostream>
+
+Model Model::loadGltf(const std::string& path, float targetSize,
+                      std::string& texturePathOut)
+{
+    texturePathOut.clear();
+    Model empty;   // se devuelve si algo falla (isValid() == false)
+
+    // ---- 1) Parseo del JSON y carga de los buffers binarios (.bin) --------
+    cgltf_options options = {};
+    cgltf_data*   data    = nullptr;
+    if (cgltf_parse_file(&options, path.c_str(), &data)
+            != cgltf_result_success) {
+        std::cerr << "[Model] No se pudo parsear glTF: " << path << std::endl;
+        return empty;
+    }
+    if (cgltf_load_buffers(&options, data, path.c_str())
+            != cgltf_result_success) {
+        std::cerr << "[Model] No se pudieron cargar los buffers de: " << path
+                  << std::endl;
+        cgltf_free(data);
+        return empty;
+    }
+
+    // ---- 2) Recorrido de nodos: se hornean sus transformaciones -----------
+    // Cada nodo con malla aporta sus primitivas de triángulos. Las
+    // posiciones se transforman con la matriz MUNDO del nodo (acumulada por
+    // toda la jerarquía) y las normales con su matriz normal.
+    std::vector<float>  verts;   // 8 floats/vértice: pos + normal + uv
+    std::vector<GLuint> idx;
+
+    for (cgltf_size ni = 0; ni < data->nodes_count; ++ni) {
+        const cgltf_node& node = data->nodes[ni];
+        if (!node.mesh)
+            continue;
+
+        float worldRaw[16];
+        cgltf_node_transform_world(&node, worldRaw);
+        const glm::mat4 world   = glm::make_mat4(worldRaw);
+        const glm::mat3 normalM = glm::mat3(glm::transpose(glm::inverse(world)));
+
+        for (cgltf_size pi = 0; pi < node.mesh->primitives_count; ++pi) {
+            const cgltf_primitive& prim = node.mesh->primitives[pi];
+            if (prim.type != cgltf_primitive_type_triangles)
+                continue;   // solo triángulos (lo que exporta Sketchfab)
+
+            // Accessors de los atributos que nos interesan.
+            const cgltf_accessor* aPos = nullptr;
+            const cgltf_accessor* aNrm = nullptr;
+            const cgltf_accessor* aUV  = nullptr;
+            for (cgltf_size ai = 0; ai < prim.attributes_count; ++ai) {
+                const cgltf_attribute& att = prim.attributes[ai];
+                if (att.type == cgltf_attribute_type_position) aPos = att.data;
+                if (att.type == cgltf_attribute_type_normal)   aNrm = att.data;
+                if (att.type == cgltf_attribute_type_texcoord && !aUV)
+                    aUV = att.data;   // TEXCOORD_0
+            }
+            if (!aPos)
+                continue;
+
+            const GLuint base = static_cast<GLuint>(verts.size() / 8);
+
+            for (cgltf_size vi = 0; vi < aPos->count; ++vi) {
+                float p[3] = {0, 0, 0}, n[3] = {0, 0, 1}, uv[2] = {0, 0};
+                cgltf_accessor_read_float(aPos, vi, p, 3);
+                if (aNrm) cgltf_accessor_read_float(aNrm, vi, n, 3);
+                if (aUV)  cgltf_accessor_read_float(aUV,  vi, uv, 2);
+
+                glm::vec3 wp = glm::vec3(world * glm::vec4(p[0], p[1], p[2], 1.f));
+                glm::vec3 wn = glm::normalize(normalM * glm::vec3(n[0], n[1], n[2]));
+
+                // Cambio de convención glTF -> proyecto: glTF usa +Y arriba;
+                // nuestros modelos locales usan +Z arriba (apoyados sobre el
+                // tablero). Rotación de +90 grados sobre X: (x,y,z)->(x,-z,y).
+                verts.insert(verts.end(), {
+                    wp.x, -wp.z, wp.y,
+                    wn.x, -wn.z, wn.y,
+                    uv[0], uv[1]
+                });
+            }
+
+            // Índices (si el primitivo no es indexado, se genera 0..N-1).
+            if (prim.indices) {
+                for (cgltf_size k = 0; k < prim.indices->count; ++k)
+                    idx.push_back(base + static_cast<GLuint>(
+                        cgltf_accessor_read_index(prim.indices, k)));
+            } else {
+                for (cgltf_size k = 0; k < aPos->count; ++k)
+                    idx.push_back(base + static_cast<GLuint>(k));
+            }
+        }
+    }
+
+    if (verts.empty() || idx.empty()) {
+        std::cerr << "[Model] glTF sin triángulos utilizables: " << path
+                  << std::endl;
+        cgltf_free(data);
+        return empty;
+    }
+
+    // ---- 3) Textura baseColor (solo la primera: modelos con atlas único) --
+    for (cgltf_size mi = 0; mi < data->materials_count; ++mi) {
+        const cgltf_material& mat = data->materials[mi];
+        if (mat.has_pbr_metallic_roughness &&
+            mat.pbr_metallic_roughness.base_color_texture.texture &&
+            mat.pbr_metallic_roughness.base_color_texture.texture->image &&
+            mat.pbr_metallic_roughness.base_color_texture.texture->image->uri) {
+
+            // La URI es relativa al .gltf y puede venir percent-encoded.
+            std::string uri =
+                mat.pbr_metallic_roughness.base_color_texture.texture->image->uri;
+            cgltf_decode_uri(uri.data());
+            uri.resize(std::strlen(uri.c_str()));
+
+            const size_t slash = path.find_last_of("/\\");
+            const std::string dir =
+                (slash == std::string::npos) ? "" : path.substr(0, slash + 1);
+            texturePathOut = dir + uri;
+            break;
+        }
+    }
+
+    cgltf_free(data);
+
+    // ---- 4) Normalización: centrar, apoyar y escalar sobre el tablero -----
+    glm::vec3 mn(FLT_MAX), mx(-FLT_MAX);
+    for (size_t i = 0; i < verts.size(); i += 8) {
+        mn = glm::min(mn, glm::vec3(verts[i], verts[i+1], verts[i+2]));
+        mx = glm::max(mx, glm::vec3(verts[i], verts[i+1], verts[i+2]));
+    }
+    const glm::vec3 extent  = mx - mn;
+    const glm::vec3 centerXY((mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f, mn.z);
+    const float     maxHoriz = std::max(extent.x, extent.y);
+    const float     scale    = (maxHoriz > 1e-6f) ? targetSize / maxHoriz : 1.0f;
+
+    for (size_t i = 0; i < verts.size(); i += 8) {
+        verts[i]     = (verts[i]     - centerXY.x) * scale;   // centrado en X
+        verts[i + 1] = (verts[i + 1] - centerXY.y) * scale;   // centrado en Y
+        verts[i + 2] = (verts[i + 2] - centerXY.z) * scale;   // base en Z = 0
+    }
+
+    std::cout << "[Model] glTF cargado: " << path << " ("
+              << verts.size() / 8 << " vertices, " << idx.size() / 3
+              << " triangulos, textura: "
+              << (texturePathOut.empty() ? "ninguna" : texturePathOut) << ")"
+              << std::endl;
+
+    Model m;
+    m.create(verts, idx, VertexLayout::PositionNormalUV, GL_TRIANGLES);
     return m;
 }

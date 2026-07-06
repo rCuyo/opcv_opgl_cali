@@ -8,6 +8,7 @@
 #include <GLFW/glfw3.h>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <iostream>
 #include <utility>
@@ -23,6 +24,11 @@ constexpr float AXES_LENGTH    = 3.0f * config::SQUARE_SIZE;
 
 // Separación a cada lado del centro cuando se muestran dos personajes (tecla 5).
 constexpr float CHARACTER_OFFSET = 2.8f * config::SQUARE_SIZE;
+
+// Modelo externo glTF (tecla 6): ruta por defecto y tamaño final sobre el
+// tablero (lado mayor horizontal, en cuadrados).
+constexpr const char* GLTF_MODEL_PATH = "models/lp_old_computer/scene.gltf";
+constexpr float       GLTF_TARGET_SIZE = 5.0f * config::SQUARE_SIZE;
 
 /// Callback estático de GLFW: redirige al Renderer dueño de la ventana.
 void keyDispatch(GLFWwindow* window, int key, int /*scancode*/,
@@ -153,10 +159,51 @@ Renderer::~Renderer()
 {
     if (m_backgroundTexture)
         glDeleteTextures(1, &m_backgroundTexture);
+    if (m_gltfTexture)
+        glDeleteTextures(1, &m_gltfTexture);
     if (m_window) {
         glfwDestroyWindow(m_window);
         glfwTerminate();
     }
+}
+
+void Renderer::loadGltfModel()
+{
+    // Geometría (posiciones + normales + UV) normalizada sobre el tablero.
+    std::string texturePath;
+    m_gltfModel = Model::loadGltf(config::resourcePath(GLTF_MODEL_PATH),
+                                  GLTF_TARGET_SIZE, texturePath);
+    if (!m_gltfModel.isValid()) {
+        std::cout << "[Renderer] Sin modelo glTF (tecla 6 desactivada)"
+                  << std::endl;
+        return;
+    }
+
+    // Textura baseColor: se decodifica con OpenCV (sin dependencias extra).
+    // Se sube SIN voltear: glTF define v=0 en la fila superior, igual que
+    // el orden de filas con el que glTexImage2D interpreta los datos.
+    if (!texturePath.empty()) {
+        cv::Mat tex = cv::imread(texturePath, cv::IMREAD_COLOR);
+        if (!tex.empty()) {
+            cv::cvtColor(tex, tex, cv::COLOR_BGR2RGB);
+            if (!tex.isContinuous())
+                tex = tex.clone();
+
+            glGenTextures(1, &m_gltfTexture);
+            glBindTexture(GL_TEXTURE_2D, m_gltfTexture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, tex.cols, tex.rows, 0,
+                         GL_RGB, GL_UNSIGNED_BYTE, tex.data);
+        } else {
+            std::cerr << "[Renderer] No se pudo leer la textura: "
+                      << texturePath << std::endl;
+        }
+    }
+
+    m_hasGltf = true;
 }
 
 void Renderer::dispatchKey(int key)
@@ -222,6 +269,10 @@ bool Renderer::init(int width, int height, const std::string& title)
             config::resourcePath(shaderDir + "axes.vert"),
             config::resourcePath(shaderDir + "axes.frag")))
         return false;
+    if (!m_texturedShader.loadFromFiles(
+            config::resourcePath(shaderDir + "model_textured.vert"),
+            config::resourcePath(shaderDir + "model_textured.frag")))
+        return false;
 
     // ---- Geometrías -----------------------------------------------------------
     m_cube    = Model::createCube(CUBE_SIZE);
@@ -229,6 +280,10 @@ bool Renderer::init(int width, int height, const std::string& title)
     m_axes    = Model::createAxes(AXES_LENGTH);
     m_pikachu = buildPikachu();
     m_raichu  = buildRaichu();
+
+    // Modelo externo glTF (tecla 6); si el archivo no existe la aplicación
+    // sigue funcionando con los modelos procedurales.
+    loadGltfModel();
 
     // Quad de fondo en coordenadas NDC directas (no necesita matrices).
     // location 0 = posición NDC, location 1 = (u, v, 0).
@@ -415,6 +470,28 @@ void Renderer::drawScene(const glm::mat4& view, const glm::mat4& projection,
             drawCharacter(m_raichu,  right);
             break;
         }
+
+        case SceneModel::Gltf:
+            if (!m_hasGltf) {
+                // Sin archivo glTF: se muestra el cubo como aviso visual.
+                m_modelShader.setMat4("uModel", m_boardCenterTransform);
+                m_modelShader.setVec3("uObjectColor", glm::vec3(0.9f, 0.1f, 0.1f));
+                m_cube.draw();
+                break;
+            }
+            // El modelo externo usa su propio shader (luz + textura).
+            m_texturedShader.use();
+            m_texturedShader.setMat4("uView", view);
+            m_texturedShader.setMat4("uProjection", projection);
+            m_texturedShader.setVec3("uLightDir",
+                                     glm::normalize(glm::vec3(0.4f, 0.3f, -1.0f)));
+            m_texturedShader.setMat4("uModel", m_boardCenterTransform);
+            m_texturedShader.setInt("uTexture", 1);   // unidad 1 (la 0 es el fondo)
+            glActiveTexture(GL_TEXTURE0 + 1);
+            glBindTexture(GL_TEXTURE_2D, m_gltfTexture);
+            m_gltfModel.draw();
+            glActiveTexture(GL_TEXTURE0);
+            break;
     }
 }
 

@@ -47,6 +47,7 @@ proyecto_opcv_3d/
     ├── shaders/                # GLSL: background, model (iluminado), axes
     ├── calibration/            # camera_params.example.yml (formato de ejemplo)
     ├── images/                 # chessboard_9x6.png (patrón imprimible/prueba)
+    ├── models/                 # modelos glTF externos (tecla 6)
     └── textures/               # (reservado)
 ```
 
@@ -129,6 +130,7 @@ cmake --build build -j
 | `3` | Mostrar **Pikachu** |
 | `4` | Mostrar **Raichu** |
 | `5` | Mostrar **Pikachu + Raichu** |
+| `6` | Mostrar **modelo glTF** (PC retro de Sketchfab) |
 | `SPACE` | Congelar / descongelar la imagen |
 | `R` | Reiniciar detección (filtro de pose, descongela) |
 | `C` | Capturar vista de calibración |
@@ -137,6 +139,23 @@ cmake --build build -j
 
 El HUD muestra en pantalla: FPS, estado del chessboard, pose encontrada
 (tvec y distancia), modelo actual, resolución y estado de calibración.
+
+### Modelos glTF propios (Sketchfab)
+
+La tecla `6` muestra un modelo externo en formato **glTF 2.0**, cargado con
+el parser de cabecera única [cgltf](https://github.com/jkuhlmann/cgltf)
+(`external/cgltf/`). Para usar tu propio modelo:
+
+1. En Sketchfab descarga con la opción **glTF** y descomprime el zip.
+2. Copia la carpeta (con `scene.gltf`, `scene.bin` y `textures/`) dentro de
+   `resources/models/`.
+3. Ajusta `GLTF_MODEL_PATH` en `src/Renderer.cpp` a la nueva ruta.
+
+El loader hornea las transformaciones de los nodos, convierte de Y-arriba
+(glTF) a Z-arriba (tablero), centra el modelo, lo apoya en el plano del
+tablero y lo escala a `GLTF_TARGET_SIZE` cuadrados. Usa la primera textura
+baseColor (suficiente para modelos con atlas único, lo habitual en
+Sketchfab); los formatos .fbx/.usdz no están soportados.
 
 ---
 
@@ -147,20 +166,19 @@ El HUD muestra en pantalla: FPS, estado del chessboard, pose encontrada
 *(código: `ChessboardDetector.cpp`)*
 
 1. El frame se convierte a escala de grises.
-2. **Detector principal `cv::findChessboardCornersSB()`** (sector-based,
-   basado en la transformada de Radon; OpenCV ≥ 4). Es **mucho más robusto**
-   que el clásico ante **perspectiva extrema** (tablero visto casi de canto o
-   muy lateral), deformación proyectiva fuerte, desenfoque y baja iluminación
-   — justo los casos donde el clásico falla. Se corre con `NORMALIZE_IMAGE`,
-   `EXHAUSTIVE` (búsqueda a fondo) y `ACCURACY` (refinamiento fino); ya
-   devuelve esquinas con precisión **subpíxel**, así que no necesita
-   `cornerSubPix`. Los frames sin tablero se descartan rápido, sin hundir el
-   frame-rate.
-3. **Fallback clásico** si SB no converge: se realza el contraste local con
-   **CLAHE** (ecualización adaptativa con límite de contraste, útil en
-   penumbra lateral) y se ejecuta `cv::findChessboardCorners()` (umbral
-   adaptativo) + `cv::cornerSubPix()` (refinamiento subpíxel). Da una segunda
-   oportunidad antes de darse por vencido.
+2. **Camino rápido — detector clásico** `cv::findChessboardCorners()` con
+   `ADAPTIVE_THRESH + NORMALIZE_IMAGE + FAST_CHECK` y refinamiento
+   **subpíxel** con `cv::cornerSubPix()`. Es el caso normal (tablero
+   razonablemente de frente): ~3-4 ms por frame a 1280×720, y `FAST_CHECK`
+   descarta rápido los frames sin tablero para no hundir el frame-rate.
+3. **Fallback robusto — `cv::findChessboardCornersSB()`** (sector-based,
+   OpenCV ≥ 4) cuando el clásico falla: es mucho más robusto ante
+   **perspectiva extrema**, desenfoque y baja iluminación. Para que no sea
+   prohibitivo (a resolución completa con `EXHAUSTIVE` cuesta 133-215
+   ms/frame, ≈5 FPS) se ejecuta a **media resolución** con contraste
+   realzado por **CLAHE**; las esquinas encontradas se reescalan ×2 y se
+   refinan con `cornerSubPix` sobre la imagen completa, recuperando la
+   precisión subpíxel.
 4. En ambos casos las esquinas quedan **ordenadas fila a fila**, lo que
    permite emparejarlas 1:1 con los puntos 3D conocidos del tablero, y se
    dibujan con `cv::drawChessboardCorners()`.
